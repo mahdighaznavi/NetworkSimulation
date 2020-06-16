@@ -17,8 +17,8 @@ class Link:
         :param ip: the sender ip
         """
         if self.is_working:
-            if self.mtu < len(pkt.body):
-                return
+            # if self.mtu < len(pkt.body):
+            #     return
             if ip == self.right.ip:
                 self.left.receive_pkt(pkt)
             else:

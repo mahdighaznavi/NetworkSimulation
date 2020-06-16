@@ -1,24 +1,83 @@
-class Router:
-    def __init__(self, id):
-        self.id = id
-        self.interfaces = dict()
+from Components.Packet import Packet
+import HP
 
-    def receive_pkt(self, pkt):
+
+def get_dict_from_string(string):
+    dest_and_dist = string.split("|")
+    ret = dict()
+    for s in dest_and_dist:
+        tmp = s.split(",")
+        ret[tmp[0]] = int(tmp[1])
+    return ret
+
+
+class Router:
+    """
+    table elements -> [interface ip, distance, is router?, hold down timer, neighbor number]
+    neighbors elements -> [neighbor ip, validity, interface, invalid timer]
+    """
+
+    def __init__(self, identifier):
+        self.id = identifier
+        self.interfaces = dict()
+        self.table = dict()
+        self.neighbors = []
+        self.ad_time = None
+        self.reset_add_timer()
+
+    def receive_pkt(self, interface, pkt):
         """
         If the packet should be dropped, drop it. O.W. forward it to the proper interface
+        :param interface: interface message received from
         :param pkt: received packet
         """
         # TODO handle received packet
-        pass
+        pkt.ttl -= 1
+        if pkt.ttl == 0:
+            interface = self.find_interface(pkt.sender)
+            if interface is not None:
+                self.send(interface, 1, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL, False, False, -1,
+                          HP.ICMP_TTL_ENDED_CODE)
+        elif pkt.type == "ad":
+            ad_table = get_dict_from_string(pkt.body)
+            for n in self.neighbors:
+                if n.interface.ip == interface.ip:
+                    n.reset_timer()
+            # print(ad_table)
+            # print(interface.ip)
+            for ip, distance in ad_table.items():
+                if self.table.__contains__(ip):
+                    if self.table[ip].len > distance + 1:
+                        # print("Just check" + str(self.table[ip]))
+                        self.table[ip].update(distance + 1, interface)
+                    elif self.table[ip].interface == interface:
+                        self.table[ip].parent_change(distance + 1)
+                else:
+                    self.table[ip] = TableNode(interface, distance + 1)
+            for ip, node in self.table.items():
+                if node.interface == interface and (not ad_table.__contains__(ip)):
+                    node.parent_change(HP.MAX_PATH_LEN)
+                # print(ip + " " + str(self.table[ip]))
+            # print()
+        else:
+            interface = self.find_interface(pkt.receiver)
+            if interface is not None:
+                self.send_pkt(interface, pkt)
+            else:
+                self.no_route_message(interface, pkt)
 
-    def connected(self, ip, is_router):
+    def connected(self, interface, ip, is_router):
         """
         to add ip to routing list
+        :param is_router:
+        :param interface:
         :param ip:
         :return:
         """
-        # TODO add ip to routing list
-        pass
+        if is_router:
+            self.neighbors.append(Neighbor(interface, ip))
+        else:
+            self.table[ip] = TableNode(interface, 1)
 
     def config(self):
         while True:
@@ -44,6 +103,119 @@ class Router:
                     # TODO set and start nat
                     pass
 
+    @staticmethod
+    def send(interface, sender_port, receiver, rcvr_port, msg_type, ttl, more_fragments, dont_fragment,
+             fragmentation_offset, body):
+        pkt = Packet(interface.ip, sender_port, receiver, rcvr_port, msg_type, ttl, more_fragments, dont_fragment,
+                     fragmentation_offset, body)
+        interface.send_pkt(pkt)
+
+    @staticmethod
+    def send_pkt(interface, pkt):
+        interface.send_pkt(pkt)
+
+    def find_interface(self, ip):
+        if self.table.__contains__(ip) and self.table[ip].valid:
+            return self.table[ip].interface
+        return None
+
+    def next_sec(self):
+        self.ad_time -= 1
+        if self.ad_time == 0:
+            self.reset_add_timer()
+            self.send_ad()
+        for ip, node in self.table.items():
+            node.try_inc_hold_down()
+        for n in self.neighbors:
+            if n.is_valid() and n.decrease_time():
+                for ip, node in self.table.items():
+                    if node.interface == n.interface:
+                        node.invalid()
+                        node.hold_down_timer = 0
+                        # print("Invalidation:" + ip + " " + str(node))
+
+    def reset_add_timer(self):
+        self.ad_time = HP.AD_TIME
+
+    def send_ad(self):
+        for n in self.neighbors:
+            send_table = ""
+            for ip, node in self.table.items():
+                if node.valid:
+                    if node.interface != n.interface:
+                        send_table = self.add_to_str(send_table, ip, node.len)
+                    else:
+                        send_table = self.add_to_str(send_table, ip, HP.MAX_PATH_LEN)
+            if len(send_table) > 0:
+                send_table = send_table[1:]
+            # print(n.interface.ip + " " + n.ip + " " + send_table)
+            self.send(n.interface, 1, n.ip, 1, "ad", 2, False, False, 0, send_table)
+
+    @staticmethod
+    def add_to_str(send_table, destination, distance):
+        send_table = send_table + "|" + str(destination) + "," + str(distance)
+        return send_table
+
+    def no_route_message(self, interface, pkt):
+        interface = self.find_interface(pkt.sender)
+        if interface is not None:
+            self.send(interface, 1, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL, False, False, 0,
+                      HP.ICMP_NO_ROUTE_CODE)
+
+
+class Neighbor:
+    def __init__(self, interface, ip):
+        self.interface = interface
+        self.ip = ip
+        self.invalid_timer = HP.INVALID_TIMER_BASE
+        self.validity = True
+
+    def decrease_time(self):
+        self.invalid_timer -= 1
+        if self.invalid_timer == 0:
+            self.validity = False
+            return True
+        return False
+
+    def is_valid(self):
+        return self.validity
+
+    def reset_timer(self):
+        self.invalid_timer = HP.INVALID_TIMER_BASE
+
+
+class TableNode:
+    def __init__(self, interface, path_length):
+        self.interface = interface
+        self.len = path_length
+        self.hold_down_timer = HP.HOLD_DOWN_TIMER
+        self.valid = True
+
+    def invalid(self):
+        self.len = HP.MAX_PATH_LEN
+        self.valid = False
+
+    def try_inc_hold_down(self):
+        if self.hold_down_timer < HP.HOLD_DOWN_TIMER:
+            self.hold_down_timer += 1
+            if self.hold_down_timer == HP.HOLD_DOWN_TIMER:
+                self.invalid()
+
+    def update(self, new_len, new_interface):
+        if self.hold_down_timer == HP.HOLD_DOWN_TIMER:
+            self.valid = True
+            self.len = min(new_len, HP.MAX_PATH_LEN)
+            self.interface = new_interface
+
+    def parent_change(self, new_len):
+        not_inf = (self.len < HP.MAX_PATH_LEN)
+        self.update(new_len, self.interface)
+        if not_inf and self.len == HP.MAX_PATH_LEN:
+            self.hold_down_timer = 0
+
+    def __str__(self):
+        return str(self.interface.ip) + " " + str(self.len) + " " + str(self.valid) + " " + str(self.hold_down_timer)
+
 
 class Interface:
     def __init__(self, ip, router):
@@ -66,12 +238,12 @@ class Interface:
         notify the router a new connection
         :param ip: other side ip
         """
-        self.router.connected(ip, is_router)
+        self.router.connected(self, ip, is_router)
         pass
 
     def send_pkt(self, pkt):
         if self.link:
-            self.link.send(pkt)
+            self.link.send(pkt, self.ip)
 
     def receive_pkt(self, pkt):
-        self.router.receive_pkt(pkt)
+        self.router.receive_pkt(self, pkt)

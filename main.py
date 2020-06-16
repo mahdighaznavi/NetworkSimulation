@@ -53,6 +53,11 @@ if __name__ == '__main__':
         cmd = input().split()
         if cmd[0] == 'sec':
             # TODO notify routers here.
+            for i in range(int(cmd[1])):
+                for r in routers:
+                    r.next_sec()
+                for c in clients:
+                    c.next_sec()
             pass
         elif cmd[0] == 'add_client':
             clients.append(Client(cmd[1]))
@@ -63,6 +68,7 @@ if __name__ == '__main__':
                 int1 = get_interface(cmd[1], routers)
                 int2 = get_interface(cmd[2], routers)
                 link = Link(int1, int2, int(cmd[3]))
+                links.append(link)
                 int1.connect(link)
                 int2.connect(link)
                 int1.connected(int2.ip, True)
@@ -77,6 +83,7 @@ if __name__ == '__main__':
                 interface = get_interface(cmd[1], routers)
                 h = Hub()
                 h.connect(interface)
+                interface.connect(h)
                 for i in range(2, len(cmd)):
                     c = get_client_or_server(cmd[i], clients, servers)
                     h.connect(c)
@@ -111,7 +118,8 @@ if __name__ == '__main__':
                 interface.config()
             except Exception as e:
                 print(e)
-        elif cmd[0] == 'send_msg\n':
+        elif cmd[0] == 'send_msg':
+            print("Here")
             msg = input('Enter msg:')
             try:
                 c = get_client(cmd[1], clients)
