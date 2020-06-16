@@ -11,6 +11,11 @@ def get_dict_from_string(string):
     return ret
 
 
+def copy_pkt(pkt):
+    return Packet(pkt.sender, pkt.sender_port, pkt.receiver, pkt.receiver_port, pkt.type, pkt.ttl, pkt.mf, pkt.df,
+                  pkt.fo, (pkt.body + ".")[:-1])
+
+
 class Router:
     """
     table elements -> [interface ip, distance, is router?, hold down timer, neighbor number]
@@ -24,6 +29,7 @@ class Router:
         self.neighbors = []
         self.ad_time = None
         self.reset_add_timer()
+        self.buffer = ""
 
     def receive_pkt(self, interface, pkt):
         """
@@ -31,15 +37,20 @@ class Router:
         :param interface: interface message received from
         :param pkt: received packet
         """
-        # TODO handle received packet
         pkt.ttl -= 1
         if pkt.ttl == 0:
             interface = self.find_interface(pkt.sender)
             if interface is not None:
-                self.send(interface, 1, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL, False, False, -1,
+                self.send(interface, 1, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL, pkt.mf, False, -1,
                           HP.ICMP_TTL_ENDED_CODE)
         elif pkt.type == "ad":
+            if pkt.mf:
+                self.buffer = self.buffer + pkt.body
+                return
+            if len(self.buffer) > 0:
+                pkt.body = self.buffer + pkt.body
             ad_table = get_dict_from_string(pkt.body)
+            self.buffer = ""
             for n in self.neighbors:
                 if n.interface.ip == interface.ip:
                     n.reset_timer()
@@ -108,11 +119,36 @@ class Router:
              fragmentation_offset, body):
         pkt = Packet(interface.ip, sender_port, receiver, rcvr_port, msg_type, ttl, more_fragments, dont_fragment,
                      fragmentation_offset, body)
-        interface.send_pkt(pkt)
+        Router.send_pkt(interface, pkt)
 
     @staticmethod
     def send_pkt(interface, pkt):
-        interface.send_pkt(pkt)
+        if interface.link is not None:
+            if len(pkt.body) > interface.link.mtu:
+                if pkt.df:
+                    Router.send(interface, 1, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL, pkt.mf, False, 0,
+                                HP.ICMP_FRAGMENTATION_NEEDED)
+                else:
+                    cur = 0
+                    new_pkt = copy_pkt(pkt)
+                    while cur < len(pkt.body):
+                        new_pkt.fo = cur
+                        # print(new_pkt)
+                        # print(cur)
+                        # print(type(interface.link.mtu))
+                        new_pkt.body = new_pkt.body[cur: min(len(pkt.body), cur + interface.link.mtu)]
+                        if cur + interface.link.mtu >= len(pkt.body):
+                            new_pkt.mf = pkt.mf
+                        else:
+                            new_pkt.mf = True
+                        new_pkt.df = False
+                        # if pkt.body == "salamm":
+                        #     print("in path: " + str(new_pkt))
+                        interface.send_pkt(new_pkt)
+                        new_pkt = copy_pkt(pkt)
+                        cur += interface.link.mtu
+            else:
+                interface.send_pkt(pkt)
 
     def find_interface(self, ip):
         if self.table.__contains__(ip) and self.table[ip].valid:
@@ -159,7 +195,7 @@ class Router:
     def no_route_message(self, interface, pkt):
         interface = self.find_interface(pkt.sender)
         if interface is not None:
-            self.send(interface, 1, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL, False, False, 0,
+            self.send(interface, 1, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL, pkt.mf, False, 0,
                       HP.ICMP_NO_ROUTE_CODE)
 
 

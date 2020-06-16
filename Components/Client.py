@@ -2,11 +2,17 @@ from Components.Packet import Packet
 import HP
 
 
+def copy_pkt(pkt):
+    return Packet(pkt.sender, pkt.sender_port, pkt.receiver, pkt.receiver_port, pkt.type, pkt.ttl, pkt.mf, pkt.df,
+                  pkt.fo, (pkt.body + ".")[:-1])
+
+
 class Client:
     def __init__(self, ip):
         self.ip = ip
         self.link = None
         self.tracing_routes = []
+        self.buffer = ""
 
     def connect(self, link):
         """
@@ -19,6 +25,14 @@ class Client:
         Show received packet
         :param pkt: received Packet
         """
+        if pkt.mf:
+            if pkt.type == "msg":
+                self.buffer = self.buffer + pkt.body
+            # print("Client: " + self.buffer)
+            return
+        if len(self.buffer) > 0:
+            pkt.body = (self.buffer + pkt.body + ".")[:-1]
+            self.buffer = ""
         if pkt.type == 'msg':
             if pkt.receiver == self.ip:
                 print(self.ip + ": msg from " + pkt.sender + " " + pkt.body)
@@ -42,6 +56,8 @@ class Client:
                 is_traced = self.finish_trace_rout("unreachable", pkt.receiver_port)
                 if not is_traced:
                     self.print("unreachable")
+            elif pkt.body == HP.ICMP_FRAGMENTATION_NEEDED:
+                self.fragmentation_error()
 
     def send_msg(self, msg, sndr_port, rcvr, rcvr_port, ttl, df):
         """
@@ -66,7 +82,27 @@ class Client:
 
     def send_pkt(self, pkt):
         if self.link:
-            self.link.send(pkt, self.ip)
+            if len(pkt.body) > self.link.mtu:
+                if pkt.df:
+                    self.fragmentation_error()
+                else:
+                    cur = 0
+                    new_pkt = copy_pkt(pkt)
+                    while cur < len(pkt.body):
+                        new_pkt.fo = cur
+                        new_pkt.body = new_pkt.body[cur:min(len(pkt.body), cur + self.link.mtu)]
+                        if cur + self.link.mtu >= len(pkt.body):
+                            new_pkt.mf = False
+                        else:
+                            new_pkt.mf = True
+                        new_pkt.df = False
+                        # print(new_pkt)
+                        self.link.send(new_pkt, self.ip)
+                        new_pkt = copy_pkt(pkt)
+                        cur += self.link.mtu
+            else:
+                # print(pkt)
+                self.link.send(pkt, self.ip)
 
     def finish_trace_rout(self, routed, port):
         for t in self.tracing_routes:
@@ -93,6 +129,9 @@ class Client:
 
     def print(self, text):
         print(self.ip + ": " + text)
+
+    def fragmentation_error(self):
+        self.print("fragmentation needed")
 
 
 class TraceRouteObject:
