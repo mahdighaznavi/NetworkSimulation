@@ -25,6 +25,8 @@ class Client:
         Show received packet
         :param pkt: received Packet
         """
+        if pkt.receiver != self.ip:
+            return
         if pkt.mf:
             if pkt.type == "msg":
                 self.buffer = self.buffer + pkt.body
@@ -34,9 +36,10 @@ class Client:
             pkt.body = (self.buffer + pkt.body + ".")[:-1]
             self.buffer = ""
         if pkt.type == 'msg':
-            if pkt.receiver == self.ip:
-                print(self.ip + ": msg from " + pkt.sender + " " + pkt.body)
+            print(self.ip + ": msg from " + pkt.sender + " " + pkt.body)
         elif pkt.type == "icmp":
+            # print("Salam")
+            # print(pkt)
             if pkt.body == HP.ICMP_PING_CODE:
                 ping_resp_packet = Packet(self.ip, pkt.receiver_port, pkt.sender, pkt.sender_port, "icmp", HP.INF_TTL,
                                           False, False, 0, HP.ICMP_PING_RESPONSE_CODE)
@@ -58,6 +61,8 @@ class Client:
                     self.print("unreachable")
             elif pkt.body == HP.ICMP_FRAGMENTATION_NEEDED:
                 self.fragmentation_error()
+            elif pkt.body == HP.ICMP_NAT_DROPPED_CODE:
+                self.nat_dropped_error()
 
     def send_msg(self, msg, sndr_port, rcvr, rcvr_port, ttl, df):
         """
@@ -117,21 +122,30 @@ class Client:
     def get_free_port(self):
         cnt = 43000
         if len(self.tracing_routes) > 0:
-            cnt = max(self.tracing_routes) + 1
+            for tr in self.tracing_routes:
+                cnt = max(cnt, tr.port)
+            cnt += 1
         return cnt
 
     def next_sec(self):
-        for i in range(len(self.tracing_routes)):
-            self.tracing_routes[i].remain -= 1
-            if self.tracing_routes[i].remain == 0:
-                self.finish_trace_rout("timeout", self.tracing_routes[i].port)
-                i -= 1
+        not_ended = True
+        while not_ended:
+            not_ended = False
+            for i in range(len(self.tracing_routes)):
+                self.tracing_routes[i].remain -= 1
+                if self.tracing_routes[i].remain == 0:
+                    self.finish_trace_rout("timeout", self.tracing_routes[i].port)
+                    not_ended = True
+                    break
 
     def print(self, text):
         print(self.ip + ": " + text)
 
     def fragmentation_error(self):
         self.print("fragmentation needed")
+
+    def nat_dropped_error(self):
+        self.print("NAT dropped")
 
 
 class TraceRouteObject:

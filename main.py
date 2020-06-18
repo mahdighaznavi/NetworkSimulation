@@ -119,7 +119,7 @@ if __name__ == '__main__':
             except Exception as e:
                 print(e)
         elif cmd[0] == 'send_msg':
-            msg = input('Enter msg:')
+            msg = input('Enter msg:\n')
             try:
                 c = get_client(cmd[1], clients)
                 c.send_msg(msg, cmd[2], cmd[3], cmd[4], cmd[5], bool(int(cmd[6])))
